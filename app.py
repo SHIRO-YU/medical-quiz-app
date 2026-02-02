@@ -217,16 +217,19 @@ def escape_html(text: str) -> str:
 # セッション状態の初期化
 def init_session_state():
     defaults = {
-        'questions': None,
+        'all_questions': None,        # CSVから読み込んだ全問題
+        'questions': None,            # 出題対象の問題（選択された件数分）
         'current_question_idx': 0,
         'answered_questions': [],
         'correct_count': 0,
         'question_order': [],
         'current_answer': None,
         'is_default_csv': False,
-        'default_load_attempted': False,  # 名前を変更: 試行済みフラグ
-        'uploaded_file_id': None,  # アップロードファイルの追跡用
-        'pending_questions': None,  # 検証済みの問題を一時保存
+        'default_load_attempted': False,
+        'uploaded_file_id': None,
+        'pending_questions': None,
+        'quiz_started': False,        # クイズ開始フラグ
+        'selected_count': None,       # 選択された出題数
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -343,16 +346,41 @@ def load_default_csv() -> list | None:
 
 
 def reset_and_load_questions(questions: list, is_default: bool = False):
-    """問題をリセットして新しい問題セットをロード"""
-    st.session_state.questions = questions
-    st.session_state.question_order = list(range(len(questions)))
-    random.shuffle(st.session_state.question_order)
+    """問題をリセットして新しい問題セットをロード（出題数選択画面へ）"""
+    st.session_state.all_questions = questions  # 全問題を保存
+    st.session_state.questions = None           # 出題対象はまだ未設定
+    st.session_state.question_order = []
     st.session_state.current_question_idx = 0
     st.session_state.answered_questions = []
     st.session_state.correct_count = 0
     st.session_state.current_answer = None
     st.session_state.is_default_csv = is_default
-    st.session_state.pending_questions = None  # クリア
+    st.session_state.pending_questions = None
+    st.session_state.quiz_started = False       # クイズ未開始
+    st.session_state.selected_count = None
+
+
+def start_quiz(num_questions: int):
+    """指定された問題数でクイズを開始"""
+    all_q = st.session_state.all_questions
+    if all_q is None:
+        return
+    
+    # ランダムに問題を選択
+    indices = list(range(len(all_q)))
+    random.shuffle(indices)
+    selected_indices = indices[:num_questions]
+    
+    # 出題対象の問題を設定
+    st.session_state.questions = [all_q[i] for i in selected_indices]
+    st.session_state.question_order = list(range(num_questions))
+    random.shuffle(st.session_state.question_order)
+    st.session_state.current_question_idx = 0
+    st.session_state.answered_questions = []
+    st.session_state.correct_count = 0
+    st.session_state.current_answer = None
+    st.session_state.quiz_started = True
+    st.session_state.selected_count = num_questions
 
 
 def next_question():
@@ -472,16 +500,21 @@ with st.sidebar:
         st.session_state.pending_questions = None
     
     # 現在の状態表示
-    if st.session_state.questions is not None:
+    if st.session_state.all_questions is not None:
         st.markdown("---")
         st.markdown("### 📊 現在の状態")
-        st.info(f"総問題数: {len(st.session_state.questions)}問")
-        if len(st.session_state.answered_questions) > 0:
-            accuracy = (st.session_state.correct_count / len(st.session_state.answered_questions) * 100)
-            st.info(f"解答済み: {len(st.session_state.answered_questions)}問\n正答率: {accuracy:.1f}%")
+        total_available = len(st.session_state.all_questions)
+        st.info(f"読込済み問題数: {total_available}問")
+        
+        if st.session_state.quiz_started and st.session_state.questions:
+            st.info(f"出題数: {len(st.session_state.questions)}問")
+            if len(st.session_state.answered_questions) > 0:
+                accuracy = (st.session_state.correct_count / len(st.session_state.answered_questions) * 100)
+                st.info(f"解答済み: {len(st.session_state.answered_questions)}問\n正答率: {accuracy:.1f}%")
 
 # メインコンテンツ
-if st.session_state.questions is None:
+if st.session_state.all_questions is None:
+    # CSVが読み込まれていない場合
     st.info("⚠️ デフォルト問題ファイル（sample_medical_questions.csv）が見つかりません")
     st.markdown("### 📤 問題ファイルをアップロードしてください")
     
@@ -498,8 +531,51 @@ Q001,心筋梗塞の初期対応として最も適切なものはどれか。,�
     - **解説**: 正解の理由や詳細説明
     - **間違えやすいポイント**: 受験生が注意すべき点
     """)
+
+elif not st.session_state.quiz_started:
+    # 出題数選択画面
+    total_questions = len(st.session_state.all_questions)
     
+    st.markdown("### 📝 クイズ設定")
+    st.success(f"📚 読み込み済み: **{total_questions}問**")
+    
+    st.markdown("---")
+    st.markdown("#### 出題数を選択してください")
+    
+    # プリセットボタン
+    col1, col2, col3, col4 = st.columns(4)
+    
+    preset_counts = [5, 10, 20, total_questions]
+    preset_labels = ["5問", "10問", "20問", f"全問（{total_questions}問）"]
+    
+    for col, count, label in zip([col1, col2, col3, col4], preset_counts, preset_labels):
+        with col:
+            if count <= total_questions:
+                if st.button(label, use_container_width=True, key=f"preset_{count}"):
+                    start_quiz(count)
+                    st.rerun()
+            else:
+                st.button(label, use_container_width=True, disabled=True, key=f"preset_{count}")
+    
+    st.markdown("---")
+    
+    # カスタム数値入力
+    st.markdown("#### またはカスタム数を入力")
+    custom_count = st.number_input(
+        "出題数",
+        min_value=1,
+        max_value=total_questions,
+        value=min(10, total_questions),
+        step=1,
+        help=f"1〜{total_questions}の範囲で指定できます"
+    )
+    
+    if st.button("🚀 クイズを開始", use_container_width=True, type="primary"):
+        start_quiz(custom_count)
+        st.rerun()
+
 else:
+    # クイズ進行中
     # 全問題終了チェック
     if st.session_state.current_question_idx >= len(st.session_state.questions):
         st.success("🎉 すべての問題が終了しました！")
@@ -527,8 +603,10 @@ else:
             st.warning("💪 もう一度復習して、再挑戦してみましょう！")
         
         if st.button("🔄 もう一度挑戦する", use_container_width=True, type="primary"):
-            st.session_state.question_order = list(range(len(st.session_state.questions)))
-            random.shuffle(st.session_state.question_order)
+            # 出題数選択画面に戻る
+            st.session_state.quiz_started = False
+            st.session_state.questions = None
+            st.session_state.question_order = []
             st.session_state.current_question_idx = 0
             st.session_state.answered_questions = []
             st.session_state.correct_count = 0
