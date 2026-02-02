@@ -356,13 +356,13 @@ def reset_and_load_questions(questions: list, is_default: bool = False):
 
 
 def next_question():
-    """次の問題へ進む"""
+    """次の問題へ進む（コールバック用）"""
     st.session_state.current_answer = None
     st.session_state.current_question_idx += 1
 
 
 def record_answer(selected_option: str, correct_answer: str):
-    """回答を記録"""
+    """回答を記録（コールバック用）"""
     is_correct = (selected_option == correct_answer)
     st.session_state.answered_questions.append({
         'question_idx': st.session_state.question_order[st.session_state.current_question_idx],
@@ -373,6 +373,13 @@ def record_answer(selected_option: str, correct_answer: str):
     if is_correct:
         st.session_state.correct_count += 1
     st.session_state.current_answer = selected_option
+
+
+def make_answer_callback(option: str, correct: str):
+    """クロージャでコールバック関数を生成"""
+    def callback():
+        record_answer(option, correct)
+    return callback
 
 
 # ===== メインアプリ =====
@@ -568,9 +575,13 @@ else:
         if st.session_state.current_answer is None:
             for option in options:
                 choice_text = question[f'選択肢{option}']
-                if st.button(f"{option}. {choice_text}", key=f"option_{option}", use_container_width=True):
-                    record_answer(option, question['正解'])
-                    st.rerun()
+                # on_clickコールバックを使用（st.rerun()不要）
+                st.button(
+                    f"{option}. {choice_text}",
+                    key=f"option_{option}",
+                    use_container_width=True,
+                    on_click=make_answer_callback(option, question['正解'])
+                )
         
         else:
             selected = st.session_state.current_answer
@@ -614,6 +625,10 @@ else:
             
             st.markdown("---")
             
-            if st.button("➡️ 次の問題へ", use_container_width=True, type="primary"):
-                next_question()
-                st.rerun()
+            # 次の問題へボタン（on_clickでst.rerun()不要）
+            st.button(
+                "➡️ 次の問題へ",
+                use_container_width=True,
+                type="primary",
+                on_click=next_question
+            )
