@@ -128,20 +128,52 @@ st.markdown("""
         margin: 20px 0;
         border-left: 4px solid #2196F3;
         line-height: 1.8;
+        color: #333333;
     }
     
-    [data-theme="dark"] .question-box {
+    /* Streamlitダークモード対応 */
+    @media (prefers-color-scheme: dark) {
+        .question-box {
+            background-color: #2d2d2d;
+            color: #ffffff !important;
+        }
+        .question-box h3 {
+            color: #64b5f6 !important;
+        }
+        .question-box p {
+            color: #ffffff !important;
+        }
+    }
+    
+    /* Streamlit独自のダークモードクラス対応 */
+    [data-testid="stAppViewContainer"][data-theme="dark"] .question-box,
+    .stApp[data-theme="dark"] .question-box,
+    html[data-theme="dark"] .question-box,
+    body[data-theme="dark"] .question-box,
+    [data-baseweb="dark"] .question-box {
         background-color: #2d2d2d;
-        color: #e0e0e0;
+        color: #ffffff !important;
+    }
+    
+    [data-testid="stAppViewContainer"][data-theme="dark"] .question-box h3,
+    .stApp[data-theme="dark"] .question-box h3,
+    html[data-theme="dark"] .question-box h3,
+    body[data-theme="dark"] .question-box h3,
+    [data-baseweb="dark"] .question-box h3 {
+        color: #64b5f6 !important;
+    }
+    
+    [data-testid="stAppViewContainer"][data-theme="dark"] .question-box p,
+    .stApp[data-theme="dark"] .question-box p,
+    html[data-theme="dark"] .question-box p,
+    body[data-theme="dark"] .question-box p,
+    [data-baseweb="dark"] .question-box p {
+        color: #ffffff !important;
     }
     
     .question-box h3 {
         margin-top: 0;
         color: #2196F3;
-    }
-    
-    [data-theme="dark"] .question-box h3 {
-        color: #64b5f6;
     }
     
     .question-box p {
@@ -527,13 +559,9 @@ else:
         current_q_idx = st.session_state.question_order[st.session_state.current_question_idx]
         question = st.session_state.questions[current_q_idx]
         
-        # 問題文表示（XSSエスケープ適用）
-        st.markdown(f"""
-        <div class="question-box">
-            <h3>問題 {current_num}</h3>
-            <p>{escape_html(question['問題文'])}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        # 問題文表示（Streamlitネイティブコンポーネントで確実に表示）
+        st.markdown(f"### 問題 {current_num}")
+        st.info(question['問題文'])
         
         options = ['A', 'B', 'C', 'D', 'E']
         
