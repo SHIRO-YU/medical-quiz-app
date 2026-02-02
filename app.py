@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import random
-from io import StringIO
+import os
+import html  # XSS対策用
 
 # ページ設定
 st.set_page_config(
@@ -10,6 +11,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# デフォルトのCSVファイルパス
+DEFAULT_CSV_PATH = "sample_medical_questions.csv"
 
 # カスタムCSS（モバイルファースト、ダークモード対応）
 st.markdown("""
@@ -172,22 +176,33 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+def escape_html(text: str) -> str:
+    """XSS対策のためのHTMLエスケープ"""
+    return html.escape(str(text))
+
+
 # セッション状態の初期化
 def init_session_state():
-    if 'questions' not in st.session_state:
-        st.session_state.questions = None
-    if 'current_question_idx' not in st.session_state:
-        st.session_state.current_question_idx = 0
-    if 'answered_questions' not in st.session_state:
-        st.session_state.answered_questions = []
-    if 'correct_count' not in st.session_state:
-        st.session_state.correct_count = 0
-    if 'question_order' not in st.session_state:
-        st.session_state.question_order = []
-    if 'current_answer' not in st.session_state:
-        st.session_state.current_answer = None
+    defaults = {
+        'questions': None,
+        'current_question_idx': 0,
+        'answered_questions': [],
+        'correct_count': 0,
+        'question_order': [],
+        'current_answer': None,
+        'is_default_csv': False,
+        'default_load_attempted': False,  # 名前を変更: 試行済みフラグ
+        'uploaded_file_id': None,  # アップロードファイルの追跡用
+        'pending_questions': None,  # 検証済みの問題を一時保存
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
 
 init_session_state()
+
 
 # サンプルデータの生成
 def generate_sample_csv():
@@ -199,55 +214,54 @@ Q004,COPD急性増悪時の酸素投与目標SpO2はどれか。,88-92%,93-95%,9
 Q005,気管支喘息の長期管理において第一選択となる薬剤はどれか。,吸入ステロイド,長時間作用性β2刺激薬,ロイコトリエン受容体拮抗薬,テオフィリン,短時間作用性β2刺激薬,A,気管支喘息の長期管理では気道炎症を抑制する吸入ステロイド（ICS）が第一選択。コントロール不良時にLABAを追加する。,短時間作用性β2刺激薬は発作時の頓用であり長期管理薬ではない。LABAは単独使用せず必ずICSと併用する。"""
     return sample_data
 
-# CSVファイルの読み込みと検証
-def load_questions(csv_file):
+
+# CSVファイルの読み込みと検証（UIメッセージなし版）
+def validate_questions(csv_file) -> tuple[list | None, list[str]]:
+    """
+    CSVファイルを検証し、問題リストとエラーリストを返す。
+    UIへの出力は行わない。
+    """
+    errors = []
+    valid_questions = []
+    
     try:
-        # CSVの読み込み
         df = pd.read_csv(csv_file)
         
-        # 必須カラムの確認
         required_columns = ['問題ID', '問題文', '選択肢A', '選択肢B', '選択肢C', 
                           '選択肢D', '選択肢E', '正解', '解説', '間違えやすいポイント']
         
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            st.error(f"❌ CSVファイルに必要な列が不足しています: {', '.join(missing_columns)}")
-            return None
+            errors.append(f"必要な列が不足: {', '.join(missing_columns)}")
+            return None, errors
         
-        # 空のデータフレームチェック
         if len(df) == 0:
-            st.error("❌ CSVファイルに問題データが含まれていません。")
-            return None
-        
-        # データの検証
-        valid_questions = []
-        errors = []
+            errors.append("CSVファイルに問題データが含まれていません")
+            return None, errors
         
         for idx, row in df.iterrows():
-            row_num = idx + 2  # ヘッダー行を考慮（1行目はヘッダー）
+            row_num = idx + 2
+            row_errors = []
             
-            # 必須フィールドの空白チェック
             if pd.isna(row['問題文']) or str(row['問題文']).strip() == '':
-                errors.append(f"行{row_num}: 問題文が空です")
+                row_errors.append(f"行{row_num}: 問題文が空です")
                 continue
             
-            # 選択肢のチェック
             has_all_choices = True
             for opt in ['A', 'B', 'C', 'D', 'E']:
                 if pd.isna(row[f'選択肢{opt}']) or str(row[f'選択肢{opt}']).strip() == '':
-                    errors.append(f"行{row_num}: 選択肢{opt}が空です")
+                    row_errors.append(f"行{row_num}: 選択肢{opt}が空です")
                     has_all_choices = False
             
             if not has_all_choices:
+                errors.extend(row_errors)
                 continue
             
-            # 正解の検証
             correct_answer = str(row['正解']).strip().upper()
             if correct_answer not in ['A', 'B', 'C', 'D', 'E']:
-                errors.append(f"行{row_num}: 正解が不正です（'{row['正解']}'）。A〜Eのいずれかを指定してください")
+                errors.append(f"行{row_num}: 正解が不正（'{row['正解']}'）")
                 continue
             
-            # 解説と間違えやすいポイントのチェック
             if pd.isna(row['解説']) or str(row['解説']).strip() == '':
                 errors.append(f"行{row_num}: 解説が空です")
                 continue
@@ -256,7 +270,6 @@ def load_questions(csv_file):
                 errors.append(f"行{row_num}: 間違えやすいポイントが空です")
                 continue
             
-            # 正常なデータとして追加
             valid_questions.append({
                 '問題ID': str(row['問題ID']),
                 '問題文': str(row['問題文']).strip(),
@@ -270,44 +283,54 @@ def load_questions(csv_file):
                 '間違えやすいポイント': str(row['間違えやすいポイント']).strip()
             })
         
-        # エラーがある場合は表示
-        if errors:
-            st.warning(f"⚠️ 以下の問題でエラーが見つかりました（{len(errors)}件）:")
-            for error in errors[:10]:  # 最初の10件のみ表示
-                st.warning(f"• {error}")
-            if len(errors) > 10:
-                st.warning(f"...他{len(errors) - 10}件のエラー")
-        
-        # 有効な問題がない場合
         if len(valid_questions) == 0:
-            st.error("❌ 有効な問題データが1件もありませんでした。CSVファイルを修正してください。")
-            return None
+            errors.append("有効な問題データが1件もありません")
+            return None, errors
         
-        # 成功メッセージ
-        if len(valid_questions) < len(df):
-            st.success(f"✅ {len(valid_questions)}問の問題を読み込みました（{len(df) - len(valid_questions)}問はエラーのためスキップ）")
-        else:
-            st.success(f"✅ {len(valid_questions)}問の問題を読み込みました")
-        
-        return valid_questions
+        return valid_questions, errors
         
     except pd.errors.EmptyDataError:
-        st.error("❌ CSVファイルが空です。")
-        return None
+        return None, ["CSVファイルが空です"]
     except pd.errors.ParserError as e:
-        st.error(f"❌ CSVファイルの解析に失敗しました: {str(e)}")
-        return None
+        return None, [f"CSVファイルの解析に失敗: {str(e)}"]
     except Exception as e:
-        st.error(f"❌ ファイルの読み込みに失敗しました: {str(e)}")
+        return None, [f"ファイル読み込み失敗: {str(e)}"]
+
+
+def load_default_csv() -> list | None:
+    """デフォルトCSVファイルを読み込む（UIメッセージなし）"""
+    if not os.path.exists(DEFAULT_CSV_PATH):
+        return None
+    
+    try:
+        with open(DEFAULT_CSV_PATH, 'r', encoding='utf-8') as f:
+            questions, _ = validate_questions(f)
+            return questions
+    except Exception:
         return None
 
-# 次の問題へ進む
+
+def reset_and_load_questions(questions: list, is_default: bool = False):
+    """問題をリセットして新しい問題セットをロード"""
+    st.session_state.questions = questions
+    st.session_state.question_order = list(range(len(questions)))
+    random.shuffle(st.session_state.question_order)
+    st.session_state.current_question_idx = 0
+    st.session_state.answered_questions = []
+    st.session_state.correct_count = 0
+    st.session_state.current_answer = None
+    st.session_state.is_default_csv = is_default
+    st.session_state.pending_questions = None  # クリア
+
+
 def next_question():
+    """次の問題へ進む"""
     st.session_state.current_answer = None
     st.session_state.current_question_idx += 1
 
-# 回答を記録
-def record_answer(selected_option, correct_answer):
+
+def record_answer(selected_option: str, correct_answer: str):
+    """回答を記録"""
     is_correct = (selected_option == correct_answer)
     st.session_state.answered_questions.append({
         'question_idx': st.session_state.question_order[st.session_state.current_question_idx],
@@ -319,44 +342,95 @@ def record_answer(selected_option, correct_answer):
         st.session_state.correct_count += 1
     st.session_state.current_answer = selected_option
 
-# メインアプリ
+
+# ===== メインアプリ =====
 st.title("🏥 医学試験対策クイズ")
+
+# 初回起動時にデフォルトCSVを自動読み込み（一度だけ試行）
+if not st.session_state.default_load_attempted:
+    st.session_state.default_load_attempted = True
+    default_questions = load_default_csv()
+    if default_questions:
+        reset_and_load_questions(default_questions, is_default=True)
+        st.rerun()
 
 # サイドバー
 with st.sidebar:
     st.header("📚 設定")
     
+    # 現在使用中の問題セット表示
+    if st.session_state.questions is not None:
+        if st.session_state.is_default_csv:
+            st.success("📋 デフォルト問題を使用中")
+        else:
+            st.info("📤 カスタム問題を使用中")
+    
+    st.markdown("---")
+    
+    # デフォルト問題に戻るボタン
+    if st.session_state.questions is not None and not st.session_state.is_default_csv:
+        if st.button("🔄 デフォルト問題に戻る", use_container_width=True, type="secondary"):
+            default_questions = load_default_csv()
+            if default_questions:
+                reset_and_load_questions(default_questions, is_default=True)
+                st.success("✅ デフォルト問題に戻りました")
+                st.rerun()
+            else:
+                st.error("❌ デフォルト問題ファイルが見つかりません")
+        st.markdown("---")
+    
     # サンプルデータのダウンロード
     sample_csv = generate_sample_csv()
     st.download_button(
-        label="📥 サンプルCSVをダウンロード",
+        label="📥 簡易サンプルCSV（5問）",
         data=sample_csv,
-        file_name="sample_medical_quiz.csv",
+        file_name="simple_sample_quiz.csv",
         mime="text/csv",
-        help="動作確認用のサンプルCSVファイルをダウンロードできます"
+        help="動作確認用の簡易サンプルCSVファイル（5問）"
     )
     
     st.markdown("---")
     
     # ファイルアップロード
+    st.markdown("### 📤 カスタム問題をアップロード")
     uploaded_file = st.file_uploader(
-        "CSVファイルをアップロード",
+        "CSVファイルを選択",
         type=['csv'],
-        help="問題データが含まれるCSVファイルを選択してください"
+        help="独自の問題データが含まれるCSVファイルをアップロード"
     )
     
+    # アップロードファイルの処理（変更時のみ検証）
     if uploaded_file is not None:
-        questions = load_questions(uploaded_file)
-        if questions:
-            if st.session_state.questions is None or st.button("🔄 問題をリセット", use_container_width=True):
-                st.session_state.questions = questions
-                st.session_state.question_order = list(range(len(questions)))
-                random.shuffle(st.session_state.question_order)
-                st.session_state.current_question_idx = 0
-                st.session_state.answered_questions = []
-                st.session_state.correct_count = 0
-                st.session_state.current_answer = None
+        current_file_id = uploaded_file.file_id
+        
+        # 新しいファイルがアップロードされた場合のみ検証
+        if st.session_state.uploaded_file_id != current_file_id:
+            st.session_state.uploaded_file_id = current_file_id
+            questions, errors = validate_questions(uploaded_file)
+            
+            if errors:
+                st.warning(f"⚠️ エラーが見つかりました（{len(errors)}件）:")
+                for error in errors[:10]:
+                    st.warning(f"• {error}")
+                if len(errors) > 10:
+                    st.warning(f"...他{len(errors) - 10}件")
+            
+            if questions:
+                st.session_state.pending_questions = questions
+                st.success(f"✅ {len(questions)}問の問題を検証しました")
+            else:
+                st.session_state.pending_questions = None
+        
+        # 検証済みの問題がある場合、使用ボタンを表示
+        if st.session_state.pending_questions:
+            if st.button("📝 この問題セットを使用", use_container_width=True, type="primary"):
+                reset_and_load_questions(st.session_state.pending_questions, is_default=False)
+                st.success("✅ カスタム問題を読み込みました")
                 st.rerun()
+    else:
+        # ファイルがクリアされた場合
+        st.session_state.uploaded_file_id = None
+        st.session_state.pending_questions = None
     
     # 現在の状態表示
     if st.session_state.questions is not None:
@@ -369,9 +443,9 @@ with st.sidebar:
 
 # メインコンテンツ
 if st.session_state.questions is None:
-    st.info("👈 左のサイドバーからCSVファイルをアップロードしてクイズを開始してください")
+    st.info("⚠️ デフォルト問題ファイル（sample_medical_questions.csv）が見つかりません")
+    st.markdown("### 📤 問題ファイルをアップロードしてください")
     
-    # サンプル表示
     st.markdown("### 📋 CSVフォーマット例")
     st.code("""問題ID,問題文,選択肢A,選択肢B,選択肢C,選択肢D,選択肢E,正解,解説,間違えやすいポイント
 Q001,心筋梗塞の初期対応として最も適切なものはどれか。,アスピリン300mg内服,ヘパリン静注,...,A,解説文,注意点""", language="csv")
@@ -403,7 +477,6 @@ else:
         with col3:
             st.metric("正答率", f"{accuracy:.1f}%")
         
-        # 結果に応じたメッセージ
         if accuracy >= 90:
             st.balloons()
             st.success("🌟 素晴らしい成績です！完璧な理解度です！")
@@ -438,7 +511,7 @@ else:
             if answered > 0:
                 st.markdown(f"### ✅ 正答率: {accuracy:.1f}%")
             else:
-                st.markdown(f"### ✅ 正答率: ---%")
+                st.markdown("### ✅ 正答率: ---%")
         
         st.markdown(f"""
         <div class="progress-container">
@@ -454,19 +527,17 @@ else:
         current_q_idx = st.session_state.question_order[st.session_state.current_question_idx]
         question = st.session_state.questions[current_q_idx]
         
-        # 問題文表示
+        # 問題文表示（XSSエスケープ適用）
         st.markdown(f"""
         <div class="question-box">
             <h3>問題 {current_num}</h3>
-            <p>{question['問題文']}</p>
+            <p>{escape_html(question['問題文'])}</p>
         </div>
         """, unsafe_allow_html=True)
         
-        # 選択肢ボタン
         options = ['A', 'B', 'C', 'D', 'E']
         
         if st.session_state.current_answer is None:
-            # 未回答の場合、選択肢ボタンを表示
             for option in options:
                 choice_text = question[f'選択肢{option}']
                 if st.button(f"{option}. {choice_text}", key=f"option_{option}", use_container_width=True):
@@ -474,12 +545,10 @@ else:
                     st.rerun()
         
         else:
-            # 回答済みの場合、結果を表示
             selected = st.session_state.current_answer
             correct = question['正解']
             is_correct = (selected == correct)
             
-            # 正解・不正解の表示
             if is_correct:
                 st.markdown("""
                 <div class="correct-answer">
@@ -490,12 +559,11 @@ else:
                 st.markdown(f"""
                 <div class="incorrect-answer">
                     ❌ 不正解です<br>
-                    あなたの回答: {selected}<br>
-                    正解: {correct}
+                    あなたの回答: {escape_html(selected)}<br>
+                    正解: {escape_html(correct)}
                 </div>
                 """, unsafe_allow_html=True)
             
-            # 選択肢の表示（結果付き）
             for option in options:
                 choice_text = question[f'選択肢{option}']
                 if option == correct:
@@ -505,21 +573,19 @@ else:
                 else:
                     st.info(f"{option}. {choice_text}")
             
-            # 解説
             with st.expander("📖 解説を見る", expanded=True):
                 st.markdown(question['解説'])
             
-            # 間違えやすいポイント
+            # 間違えやすいポイント（XSSエスケープ適用）
             st.markdown(f"""
             <div class="pitfall-box">
                 <strong>⚠️ 間違えやすいポイント</strong><br>
-                {question['間違えやすいポイント']}
+                {escape_html(question['間違えやすいポイント'])}
             </div>
             """, unsafe_allow_html=True)
             
             st.markdown("---")
             
-            # 次の問題へボタン
             if st.button("➡️ 次の問題へ", use_container_width=True, type="primary"):
                 next_question()
                 st.rerun()
