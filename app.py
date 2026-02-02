@@ -12,8 +12,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# デフォルトのCSVファイルパス
-DEFAULT_CSV_PATH = "sample_medical_questions.csv"
+# デフォルトのCSVファイルパス（スクリプトと同じディレクトリを基準）
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CSV_PATH = os.path.join(SCRIPT_DIR, "sample_medical_questions.csv")
 
 # カスタムCSS（モバイルファースト、ダークモード対応）
 st.markdown("""
