@@ -13,24 +13,22 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# パス設定（スクリプトと同じディレクトリを基準）
+# パス設定
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_CSV_PATH = SCRIPT_DIR / "sample_medical_questions.csv"
+QUESTION_SETS_DIR = SCRIPT_DIR / "question_sets"
 IMAGES_DIR = SCRIPT_DIR / "images"
 
 # サポートする画像拡張子
 SUPPORTED_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
 
-# カスタムCSS（モバイルファースト、ダークモード対応）
+# カスタムCSS
 st.markdown("""
 <style>
-    /* 全体のスタイル */
     .stApp {
         max-width: 800px;
         margin: 0 auto;
     }
     
-    /* 選択肢ボタンのスタイル */
     .stButton > button {
         width: 100%;
         min-height: 80px;
@@ -53,7 +51,6 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
     }
     
-    /* モバイル対応 */
     @media (max-width: 768px) {
         .stButton > button {
             font-size: 14px;
@@ -62,7 +59,6 @@ st.markdown("""
         }
     }
     
-    /* 正解・不正解の表示 */
     .correct-answer {
         background-color: #4CAF50;
         color: white;
@@ -85,7 +81,6 @@ st.markdown("""
         text-align: center;
     }
     
-    /* 間違えやすいポイントの強調 */
     .pitfall-box {
         background-color: #fff3cd;
         color: #856404;
@@ -102,7 +97,6 @@ st.markdown("""
         border-left: 4px solid #ffc107;
     }
     
-    /* 進捗バー */
     .progress-container {
         background-color: #e0e0e0;
         border-radius: 10px;
@@ -126,28 +120,32 @@ st.markdown("""
         font-weight: bold;
     }
     
-    /* 問題画像のスタイル */
-    .question-image {
-        max-width: 100%;
-        border-radius: 8px;
+    .question-set-card {
+        background-color: #f8f9fa;
+        border: 2px solid #e0e0e0;
+        border-radius: 12px;
+        padding: 20px;
         margin: 15px 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        cursor: pointer;
+        transition: all 0.3s;
     }
     
-    /* タイトル */
+    .question-set-card:hover {
+        border-color: #4CAF50;
+        box-shadow: 0 4px 12px rgba(76, 175, 80, 0.2);
+    }
+    
+    [data-theme="dark"] .question-set-card {
+        background-color: #2d2d2d;
+        border-color: #424242;
+    }
+    
     h1 {
         text-align: center;
         color: #2196F3;
         margin-bottom: 30px;
     }
     
-    /* エクスパンダーのスタイル改善 */
-    .streamlit-expanderHeader {
-        font-size: 16px;
-        font-weight: bold;
-    }
-    
-    /* モバイルでのパディング調整 */
     @media (max-width: 768px) {
         .correct-answer, .incorrect-answer {
             font-size: 18px;
@@ -165,21 +163,13 @@ def escape_html(text: str) -> str:
 
 @st.cache_data
 def build_image_index(images_dir: Path) -> dict[str, Path]:
-    """
-    画像フォルダをスキャンし、問題ID→画像パスのマッピングを作成。
-    キャッシュされるため、起動時に1回だけ実行される。
-    
-    Returns:
-        dict: {問題ID(小文字): 画像パス} の辞書
-    """
+    """画像フォルダをスキャンし、問題ID→画像パスのマッピングを作成"""
     image_map = {}
-    
     if not images_dir.exists():
         return image_map
     
     for file_path in images_dir.iterdir():
         if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
-            # 拡張子を除いたファイル名を問題IDとして使用（小文字に正規化）
             question_id = file_path.stem.lower()
             image_map[question_id] = file_path
     
@@ -187,17 +177,7 @@ def build_image_index(images_dir: Path) -> dict[str, Path]:
 
 
 def get_question_image(question_id: str, image_map: dict[str, Path]) -> Path | None:
-    """
-    問題IDに対応する画像パスを取得。
-    
-    Args:
-        question_id: 問題ID（例: "Q001"）
-        image_map: 画像インデックス
-    
-    Returns:
-        画像のパス、または存在しない場合はNone
-    """
-    # 問題IDを小文字に正規化して検索
+    """問題IDに対応する画像パスを取得"""
     normalized_id = question_id.lower()
     return image_map.get(normalized_id)
 
@@ -205,31 +185,61 @@ def get_question_image(question_id: str, image_map: dict[str, Path]) -> Path | N
 def display_question_image(question_id: str, image_map: dict[str, Path]):
     """問題に対応する画像があれば表示"""
     image_path = get_question_image(question_id, image_map)
-    
     if image_path and image_path.exists():
-        st.image(
-            str(image_path),
-            caption=f"📷 問題画像",
-            use_container_width=True
-        )
+        st.image(str(image_path), caption=f"📷 問題画像", use_container_width=True)
 
 
-# セッション状態の初期化
+@st.cache_data
+def get_available_question_sets() -> list[dict]:
+    """利用可能な問題セットの一覧を取得"""
+    question_sets = []
+    
+    if not QUESTION_SETS_DIR.exists():
+        return question_sets
+    
+    for csv_file in QUESTION_SETS_DIR.glob("*.csv"):
+        try:
+            # CSVファイルの最初の行だけ読んで問題数をカウント
+            df = pd.read_csv(csv_file, nrows=0)
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                line_count = sum(1 for _ in f) - 1  # ヘッダーを除く
+            
+            question_sets.append({
+                'name': csv_file.stem,
+                'path': csv_file,
+                'count': line_count,
+                'description': get_set_description(csv_file.stem)
+            })
+        except Exception:
+            continue
+    
+    return sorted(question_sets, key=lambda x: x['name'])
+
+
+def get_set_description(set_name: str) -> str:
+    """問題セット名から説明文を生成"""
+    descriptions = {
+        '医学基礎問題_30問': '医学基礎問題（循環器・呼吸器・消化器など）',
+        '総合予想問題_403問': '総合予想問題（物理・化学・生理学・統計など）',
+    }
+    return descriptions.get(set_name, '問題セット')
+
+
 def init_session_state():
+    """セッション状態の初期化"""
     defaults = {
-        'all_questions': None,        # CSVから読み込んだ全問題
-        'questions': None,            # 出題対象の問題（選択された件数分）
+        'selected_set': None,
+        'all_questions': None,
+        'questions': None,
         'current_question_idx': 0,
         'answered_questions': [],
         'correct_count': 0,
         'question_order': [],
         'current_answer': None,
-        'is_default_csv': False,
-        'default_load_attempted': False,
-        'uploaded_file_id': None,
-        'pending_questions': None,
         'quiz_started': False,
         'selected_count': None,
+        'uploaded_file_id': None,
+        'pending_questions': None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -239,29 +249,13 @@ def init_session_state():
 init_session_state()
 
 
-# サンプルデータの生成
-def generate_sample_csv():
-    sample_data = """問題ID,問題文,選択肢A,選択肢B,選択肢C,選択肢D,選択肢E,正解,解説,間違えやすいポイント
-Q001,心筋梗塞の初期対応として最も適切なものはどれか。,アスピリン300mg内服,ヘパリン静注,ワルファリン内服,ジピリダモール内服,チクロピジン内服,A,急性心筋梗塞の初期対応では抗血小板薬としてアスピリン300mgの投与が推奨される。血小板凝集を抑制し、血栓の進展を防ぐ。,ヘパリンは抗凝固薬であり初期対応としては推奨されない。ワルファリンは作用発現が遅く急性期には不適切。
-Q002,肺血栓塞栓症の診断に最も有用な検査はどれか。,胸部X線,心電図,造影CT,D-ダイマー,動脈血ガス,C,肺血栓塞栓症の確定診断には造影CT（特にCTPA: CT肺動脈造影）が最も有用。肺動脈内の血栓を直接描出できる。,D-ダイマーは除外診断に有用だが、陽性でも特異度が低い。心電図のS1Q3T3パターンは感度が低い。
-Q003,慢性心不全患者に禁忌の薬剤はどれか。,ACE阻害薬,β遮断薬,ループ利尿薬,NSAIDs,スピロノラクトン,D,NSAIDsは腎血流量を低下させ、体液貯留を引き起こすため慢性心不全では禁忌。また利尿薬の効果を減弱させる。,β遮断薬は過去には禁忌とされたが、現在は慢性心不全の標準治療。急性増悪時には注意が必要。
-Q004,COPD急性増悪時の酸素投与目標SpO2はどれか。,88-92%,93-95%,96-98%,99-100%,85%以下,A,COPD患者では高濃度酸素投与によりCO2ナルコーシスのリスクがあるため、SpO2 88-92%を目標とする。,健常者の目標SpO2（96%以上）を適用すると高CO2血症を招く危険がある。Ⅱ型呼吸不全の理解が重要。
-Q005,気管支喘息の長期管理において第一選択となる薬剤はどれか。,吸入ステロイド,長時間作用性β2刺激薬,ロイコトリエン受容体拮抗薬,テオフィリン,短時間作用性β2刺激薬,A,気管支喘息の長期管理では気道炎症を抑制する吸入ステロイド（ICS）が第一選択。コントロール不良時にLABAを追加する。,短時間作用性β2刺激薬は発作時の頓用であり長期管理薬ではない。LABAは単独使用せず必ずICSと併用する。"""
-    return sample_data
-
-
-# CSVファイルの読み込みと検証（UIメッセージなし版）
 def validate_questions(csv_file) -> tuple[list | None, list[str]]:
-    """
-    CSVファイルを検証し、問題リストとエラーリストを返す。
-    UIへの出力は行わない。
-    """
+    """CSVファイルを検証し、問題リストとエラーリストを返す"""
     errors = []
     valid_questions = []
     
     try:
         df = pd.read_csv(csv_file)
-        
         required_columns = ['問題ID', '問題文', '選択肢A', '選択肢B', '選択肢C', 
                           '選択肢D', '選択肢E', '正解', '解説', '間違えやすいポイント']
         
@@ -276,20 +270,18 @@ def validate_questions(csv_file) -> tuple[list | None, list[str]]:
         
         for idx, row in df.iterrows():
             row_num = idx + 2
-            row_errors = []
             
             if pd.isna(row['問題文']) or str(row['問題文']).strip() == '':
-                row_errors.append(f"行{row_num}: 問題文が空です")
+                errors.append(f"行{row_num}: 問題文が空です")
                 continue
             
             has_all_choices = True
             for opt in ['A', 'B', 'C', 'D', 'E']:
                 if pd.isna(row[f'選択肢{opt}']) or str(row[f'選択肢{opt}']).strip() == '':
-                    row_errors.append(f"行{row_num}: 選択肢{opt}が空です")
+                    errors.append(f"行{row_num}: 選択肢{opt}が空です")
                     has_all_choices = False
             
             if not has_all_choices:
-                errors.extend(row_errors)
                 continue
             
             correct_answer = str(row['正解']).strip().upper()
@@ -324,29 +316,22 @@ def validate_questions(csv_file) -> tuple[list | None, list[str]]:
         
         return valid_questions, errors
         
-    except pd.errors.EmptyDataError:
-        return None, ["CSVファイルが空です"]
-    except pd.errors.ParserError as e:
-        return None, [f"CSVファイルの解析に失敗: {str(e)}"]
     except Exception as e:
         return None, [f"ファイル読み込み失敗: {str(e)}"]
 
 
-def load_default_csv() -> list | None:
-    """デフォルトCSVファイルを読み込む（UIメッセージなし）"""
-    if not DEFAULT_CSV_PATH.exists():
-        return None
-    
+def load_question_set(set_path: Path) -> list | None:
+    """問題セットを読み込む"""
     try:
-        with open(DEFAULT_CSV_PATH, 'r', encoding='utf-8') as f:
+        with open(set_path, 'r', encoding='utf-8') as f:
             questions, _ = validate_questions(f)
             return questions
     except Exception:
         return None
 
 
-def reset_and_load_questions(questions: list, is_default: bool = False):
-    """問題をリセットして新しい問題セットをロード（出題数選択画面へ）"""
+def reset_and_load_questions(questions: list):
+    """問題をリセットして新しい問題セットをロード"""
     st.session_state.all_questions = questions
     st.session_state.questions = None
     st.session_state.question_order = []
@@ -354,7 +339,6 @@ def reset_and_load_questions(questions: list, is_default: bool = False):
     st.session_state.answered_questions = []
     st.session_state.correct_count = 0
     st.session_state.current_answer = None
-    st.session_state.is_default_csv = is_default
     st.session_state.pending_questions = None
     st.session_state.quiz_started = False
     st.session_state.selected_count = None
@@ -382,13 +366,13 @@ def start_quiz(num_questions: int):
 
 
 def next_question():
-    """次の問題へ進む（コールバック用）"""
+    """次の問題へ進む"""
     st.session_state.current_answer = None
     st.session_state.current_question_idx += 1
 
 
 def record_answer(selected_option: str, correct_answer: str):
-    """回答を記録（コールバック用）"""
+    """回答を記録"""
     is_correct = (selected_option == correct_answer)
     st.session_state.answered_questions.append({
         'question_idx': st.session_state.question_order[st.session_state.current_question_idx],
@@ -411,67 +395,47 @@ def make_answer_callback(option: str, correct: str):
 # ===== メインアプリ =====
 st.title("🏥 医学試験対策クイズ")
 
-# 画像インデックスを構築（キャッシュされる）
+# 画像インデックスを構築
 image_map = build_image_index(IMAGES_DIR)
 
-# 初回起動時にデフォルトCSVを自動読み込み（一度だけ試行）
-if not st.session_state.default_load_attempted:
-    st.session_state.default_load_attempted = True
-    default_questions = load_default_csv()
-    if default_questions:
-        reset_and_load_questions(default_questions, is_default=True)
-        st.rerun()
-
-# サイドバー
-with st.sidebar:
-    st.header("📚 設定")
+# 問題セット選択画面
+if st.session_state.selected_set is None and st.session_state.all_questions is None:
+    st.markdown("### 📚 問題セットを選択してください")
     
-    # 現在使用中の問題セット表示
-    if st.session_state.all_questions is not None:
-        if st.session_state.is_default_csv:
-            st.success("📋 デフォルト問題を使用中")
-        else:
-            st.info("📤 カスタム問題を使用中")
+    # 利用可能な問題セットを取得
+    available_sets = get_available_question_sets()
     
-    # 画像フォルダの状態表示
-    if image_map:
-        st.info(f"🖼️ 画像: {len(image_map)}件検出")
+    if not available_sets:
+        st.error("⚠️ 問題セットが見つかりません。`question_sets`フォルダにCSVファイルを配置してください。")
+    else:
+        for question_set in available_sets:
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown(f"#### 📋 {question_set['name']}")
+                st.markdown(f"*{question_set['description']}*")
+                st.markdown(f"**問題数: {question_set['count']}問**")
+            
+            with col2:
+                if st.button("選択", key=f"select_{question_set['name']}", use_container_width=True):
+                    questions = load_question_set(question_set['path'])
+                    if questions:
+                        st.session_state.selected_set = question_set['name']
+                        reset_and_load_questions(questions)
+                        st.rerun()
+                    else:
+                        st.error("問題セットの読み込みに失敗しました")
+            
+            st.markdown("---")
     
-    st.markdown("---")
-    
-    # デフォルト問題に戻るボタン
-    if st.session_state.all_questions is not None and not st.session_state.is_default_csv:
-        if st.button("🔄 デフォルト問題に戻る", use_container_width=True, type="secondary"):
-            default_questions = load_default_csv()
-            if default_questions:
-                reset_and_load_questions(default_questions, is_default=True)
-                st.success("✅ デフォルト問題に戻りました")
-                st.rerun()
-            else:
-                st.error("❌ デフォルト問題ファイルが見つかりません")
-        st.markdown("---")
-    
-    # サンプルデータのダウンロード
-    sample_csv = generate_sample_csv()
-    st.download_button(
-        label="📥 簡易サンプルCSV（5問）",
-        data=sample_csv,
-        file_name="simple_sample_quiz.csv",
-        mime="text/csv",
-        help="動作確認用の簡易サンプルCSVファイル（5問）"
-    )
-    
-    st.markdown("---")
-    
-    # ファイルアップロード
-    st.markdown("### 📤 カスタム問題をアップロード")
+    # カスタムアップロード機能
+    st.markdown("### 📤 または、独自の問題をアップロード")
     uploaded_file = st.file_uploader(
         "CSVファイルを選択",
         type=['csv'],
         help="独自の問題データが含まれるCSVファイルをアップロード"
     )
     
-    # アップロードファイルの処理（変更時のみ検証）
     if uploaded_file is not None:
         current_file_id = uploaded_file.file_id
         
@@ -494,16 +458,37 @@ with st.sidebar:
         
         if st.session_state.pending_questions:
             if st.button("📝 この問題セットを使用", use_container_width=True, type="primary"):
-                reset_and_load_questions(st.session_state.pending_questions, is_default=False)
+                st.session_state.selected_set = "カスタム問題"
+                reset_and_load_questions(st.session_state.pending_questions)
                 st.success("✅ カスタム問題を読み込みました")
                 st.rerun()
-    else:
-        st.session_state.uploaded_file_id = None
-        st.session_state.pending_questions = None
+
+# サイドバー
+with st.sidebar:
+    st.header("📚 設定")
+    
+    # 現在の問題セット表示
+    if st.session_state.selected_set:
+        st.success(f"📋 {st.session_state.selected_set}")
+    
+    # 画像フォルダの状態表示
+    if image_map:
+        st.info(f"🖼️ 画像: {len(image_map)}件検出")
+    
+    st.markdown("---")
+    
+    # 問題セット選択に戻るボタン
+    if st.session_state.all_questions is not None:
+        if st.button("🔄 問題セットを変更", use_container_width=True, type="secondary"):
+            st.session_state.selected_set = None
+            st.session_state.all_questions = None
+            st.session_state.questions = None
+            st.session_state.quiz_started = False
+            st.rerun()
+        st.markdown("---")
     
     # 現在の状態表示
     if st.session_state.all_questions is not None:
-        st.markdown("---")
         st.markdown("### 📊 現在の状態")
         total_available = len(st.session_state.all_questions)
         st.info(f"読込済み問題数: {total_available}問")
@@ -516,30 +501,8 @@ with st.sidebar:
 
 # メインコンテンツ
 if st.session_state.all_questions is None:
-    # CSVが読み込まれていない場合
-    st.info("⚠️ デフォルト問題ファイル（sample_medical_questions.csv）が見つかりません")
-    st.markdown("### 📤 問題ファイルをアップロードしてください")
-    
-    st.markdown("### 📋 CSVフォーマット例")
-    st.code("""問題ID,問題文,選択肢A,選択肢B,選択肢C,選択肢D,選択肢E,正解,解説,間違えやすいポイント
-Q001,心筋梗塞の初期対応として最も適切なものはどれか。,アスピリン300mg内服,ヘパリン静注,...,A,解説文,注意点""", language="csv")
-    
-    st.markdown("### ✅ 必須項目")
-    st.markdown("""
-    - **問題ID**: 問題を識別するID（例: Q001）
-    - **問題文**: 出題する問題文
-    - **選択肢A〜E**: 5つの選択肢すべて必須
-    - **正解**: A, B, C, D, Eのいずれか
-    - **解説**: 正解の理由や詳細説明
-    - **間違えやすいポイント**: 受験生が注意すべき点
-    """)
-    
-    st.markdown("### 🖼️ 画像の追加方法")
-    st.markdown("""
-    1. `images` フォルダを作成
-    2. 画像ファイル名を問題IDと同じにする（例: `Q001.png`, `Q002.jpg`）
-    3. 対応形式: PNG, JPG, JPEG, GIF, WEBP
-    """)
+    # 問題セット選択画面（上記で表示済み）
+    pass
 
 elif not st.session_state.quiz_started:
     # 出題数選択画面
@@ -548,7 +511,6 @@ elif not st.session_state.quiz_started:
     st.markdown("### 📝 クイズ設定")
     st.success(f"📚 読み込み済み: **{total_questions}問**")
     
-    # 画像付き問題数を表示
     if image_map:
         questions_with_images = sum(
             1 for q in st.session_state.all_questions 
@@ -561,7 +523,6 @@ elif not st.session_state.quiz_started:
     
     # プリセットボタン
     col1, col2, col3, col4 = st.columns(4)
-    
     preset_counts = [5, 10, 20, total_questions]
     preset_labels = ["5問", "10問", "20問", f"全問（{total_questions}問）"]
     
@@ -575,8 +536,6 @@ elif not st.session_state.quiz_started:
                 st.button(label, use_container_width=True, disabled=True, key=f"preset_{count}")
     
     st.markdown("---")
-    
-    # カスタム数値入力
     st.markdown("#### またはカスタム数を入力")
     custom_count = st.number_input(
         "出題数",
@@ -593,8 +552,8 @@ elif not st.session_state.quiz_started:
 
 else:
     # クイズ進行中
-    # 全問題終了チェック
     if st.session_state.current_question_idx >= len(st.session_state.questions):
+        # 全問題終了
         st.success("🎉 すべての問題が終了しました！")
         
         total = len(st.session_state.answered_questions)
@@ -620,7 +579,6 @@ else:
             st.warning("💪 もう一度復習して、再挑戦してみましょう！")
         
         if st.button("🔄 もう一度挑戦する", use_container_width=True, type="primary"):
-            # 出題数選択画面に戻る
             st.session_state.quiz_started = False
             st.session_state.questions = None
             st.session_state.question_order = []
@@ -631,7 +589,7 @@ else:
             st.rerun()
     
     else:
-        # 進捗表示
+        # 問題表示
         total_questions = len(st.session_state.questions)
         current_num = st.session_state.current_question_idx + 1
         progress = (current_num / total_questions) * 100
@@ -671,6 +629,7 @@ else:
         options = ['A', 'B', 'C', 'D', 'E']
         
         if st.session_state.current_answer is None:
+            # 未回答
             for option in options:
                 choice_text = question[f'選択肢{option}']
                 st.button(
@@ -681,6 +640,7 @@ else:
                 )
         
         else:
+            # 回答済み
             selected = st.session_state.current_answer
             correct = question['正解']
             is_correct = (selected == correct)
@@ -712,7 +672,6 @@ else:
             with st.expander("📖 解説を見る", expanded=True):
                 st.markdown(question['解説'])
             
-            # 間違えやすいポイント
             st.markdown(f"""
             <div class="pitfall-box">
                 <strong>⚠️ 間違えやすいポイント</strong><br>
@@ -722,7 +681,6 @@ else:
             
             st.markdown("---")
             
-            # 次の問題へボタン
             st.button(
                 "➡️ 次の問題へ",
                 use_container_width=True,

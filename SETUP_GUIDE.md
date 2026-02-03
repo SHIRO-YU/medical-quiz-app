@@ -1,4 +1,4 @@
-# 🚀 GitHubへのアップロード手順
+# 🚀 セットアップガイド
 
 ## 📦 このフォルダをダウンロードしたら...
 
@@ -19,8 +19,7 @@
    - 上の「Publish repository」をクリック
    - 「Publish repository」を再度クリック
 
-4. **完了！**
-   - GitHubにアップロード完了です
+4. **完了！** GitHubにアップロード完了です
 
 ---
 
@@ -37,7 +36,7 @@ git init
 git add .
 
 # コミット
-git commit -m "医学試験対策クイズアプリを追加"
+git commit -m "医学試験対策クイズアプリ（問題セット選択機能付き）"
 
 # GitHubでリポジトリを作成後、以下を実行
 git remote add origin https://github.com/あなたのユーザー名/medical-quiz-app.git
@@ -69,11 +68,39 @@ git push -u origin main
 
 ## 📝 含まれているファイル
 
-- `app.py` - メインのアプリケーション
-- `requirements.txt` - 必要なライブラリ一覧
-- `README.md` - プロジェクトの説明
-- `.gitignore` - Git管理対象外のファイル設定
+- `app.py` - メインアプリケーション
+- `requirements.txt` - 必要なライブラリ
+- `README.md` - プロジェクト説明
+- `.gitignore` - Git設定
 - `SETUP_GUIDE.md` - このファイル
+- `question_sets/` - 問題セットフォルダ
+  - `医学基礎問題_30問.csv` - 医学基礎問題
+  - `総合予想問題_403問.csv` - 総合予想問題
+- `images/` - 画像フォルダ（空の場合あり）
+
+---
+
+## 🎯 問題セットの追加方法
+
+1. `question_sets/` フォルダに新しいCSVファイルを追加
+2. ファイル名は自由（例: `過去問2024.csv`）
+3. アプリを再起動すると自動的に認識されます
+
+### CSVフォーマット
+
+```csv
+問題ID,問題文,選択肢A,選択肢B,選択肢C,選択肢D,選択肢E,正解,解説,間違えやすいポイント
+Q001,問題文,選択肢A,選択肢B,選択肢C,選択肢D,選択肢E,A,解説文,注意点
+```
+
+---
+
+## 🖼️ 画像の追加方法
+
+1. `images/` フォルダを作成（まだない場合）
+2. 画像ファイル名を問題IDと同じにする
+   - 例: `Q001.png`, `PHY_001.jpg`
+3. 対応形式: PNG, JPG, JPEG, GIF, WEBP
 
 ---
 
@@ -87,3 +114,8 @@ git push -u origin main
 
 - アプリが起動しない
   → Python 3.8以上がインストールされていますか？
+  → `pip install -r requirements.txt` を実行しましたか？
+
+- 問題セットが表示されない
+  → `question_sets/` フォルダにCSVファイルがありますか？
+  → CSVの形式は正しいですか？
