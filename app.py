@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import random
-import os
 import html
 from pathlib import Path
 
@@ -186,7 +185,7 @@ def display_question_image(question_id: str, image_map: dict[str, Path]):
     """問題に対応する画像があれば表示"""
     image_path = get_question_image(question_id, image_map)
     if image_path and image_path.exists():
-        st.image(str(image_path), caption=f"📷 問題画像", use_container_width=True)
+        st.image(str(image_path), caption="📷 問題画像", use_container_width=True)
 
 
 @st.cache_data
@@ -199,17 +198,17 @@ def get_available_question_sets() -> list[dict]:
     
     for csv_file in QUESTION_SETS_DIR.glob("*.csv"):
         try:
-            # CSVファイルの最初の行だけ読んで問題数をカウント
-            df = pd.read_csv(csv_file, nrows=0)
+            # ファイルを1回だけ開いて行数をカウント
             with open(csv_file, 'r', encoding='utf-8') as f:
                 line_count = sum(1 for _ in f) - 1  # ヘッダーを除く
             
-            question_sets.append({
-                'name': csv_file.stem,
-                'path': csv_file,
-                'count': line_count,
-                'description': get_set_description(csv_file.stem)
-            })
+            if line_count > 0:  # 空ファイルを除外
+                question_sets.append({
+                    'name': csv_file.stem,
+                    'path': csv_file,
+                    'count': line_count,
+                    'description': get_set_description(csv_file.stem)
+                })
         except Exception:
             continue
     
@@ -234,7 +233,6 @@ def init_session_state():
         'current_question_idx': 0,
         'answered_questions': [],
         'correct_count': 0,
-        'question_order': [],
         'current_answer': None,
         'quiz_started': False,
         'selected_count': None,
@@ -334,7 +332,6 @@ def reset_and_load_questions(questions: list):
     """問題をリセットして新しい問題セットをロード"""
     st.session_state.all_questions = questions
     st.session_state.questions = None
-    st.session_state.question_order = []
     st.session_state.current_question_idx = 0
     st.session_state.answered_questions = []
     st.session_state.correct_count = 0
@@ -350,19 +347,17 @@ def start_quiz(num_questions: int):
     if all_q is None:
         return
     
-    indices = list(range(len(all_q)))
-    random.shuffle(indices)
-    selected_indices = indices[:num_questions]
+    # ランダムに問題を選択（効率化: random.sampleを使用）
+    actual_count = min(num_questions, len(all_q))
+    selected_questions = random.sample(all_q, actual_count)
     
-    st.session_state.questions = [all_q[i] for i in selected_indices]
-    st.session_state.question_order = list(range(num_questions))
-    random.shuffle(st.session_state.question_order)
+    st.session_state.questions = selected_questions
     st.session_state.current_question_idx = 0
     st.session_state.answered_questions = []
     st.session_state.correct_count = 0
     st.session_state.current_answer = None
     st.session_state.quiz_started = True
-    st.session_state.selected_count = num_questions
+    st.session_state.selected_count = actual_count
 
 
 def next_question():
@@ -375,7 +370,7 @@ def record_answer(selected_option: str, correct_answer: str):
     """回答を記録"""
     is_correct = (selected_option == correct_answer)
     st.session_state.answered_questions.append({
-        'question_idx': st.session_state.question_order[st.session_state.current_question_idx],
+        'question_idx': st.session_state.current_question_idx,
         'selected': selected_option,
         'correct': correct_answer,
         'is_correct': is_correct
@@ -498,6 +493,12 @@ with st.sidebar:
             if len(st.session_state.answered_questions) > 0:
                 accuracy = (st.session_state.correct_count / len(st.session_state.answered_questions) * 100)
                 st.info(f"解答済み: {len(st.session_state.answered_questions)}問\n正答率: {accuracy:.1f}%")
+    
+    # キャッシュクリア機能（デバッグ用）
+    st.markdown("---")
+    if st.button("🗑️ キャッシュをクリア", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 # メインコンテンツ
 if st.session_state.all_questions is None:
@@ -581,7 +582,6 @@ else:
         if st.button("🔄 もう一度挑戦する", use_container_width=True, type="primary"):
             st.session_state.quiz_started = False
             st.session_state.questions = None
-            st.session_state.question_order = []
             st.session_state.current_question_idx = 0
             st.session_state.answered_questions = []
             st.session_state.correct_count = 0
@@ -616,8 +616,7 @@ else:
         st.markdown("---")
         
         # 現在の問題を取得
-        current_q_idx = st.session_state.question_order[st.session_state.current_question_idx]
-        question = st.session_state.questions[current_q_idx]
+        question = st.session_state.questions[st.session_state.current_question_idx]
         
         # 問題文表示
         st.markdown(f"### 問題 {current_num}")
